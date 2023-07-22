@@ -1,5 +1,6 @@
 ﻿using ChessChallenge.API;
 using System;
+using System.Collections.Generic;
 
 public class MyBot : IChessBot
 {
@@ -12,10 +13,17 @@ public class MyBot : IChessBot
         Move[] allMoves = board.GetLegalMoves();
         Move bestMove = allMoves[0];
 
+        List<Move> forcingMoves = new List<Move>();
+
         // Look for the highest eval. Eval function
         // evaluates from the perspective of our side, 
         // so we want the highest achievable
         int bestMoveEval = -1000000;
+
+        foreach (Move move in allMoves)
+            if(move.IsCapture || move.IsPromotion /*add checks*/)
+                forcingMoves.Add(move);
+
 
         foreach (Move move in allMoves)
         {
@@ -103,8 +111,9 @@ public class MyBot : IChessBot
 
     int measureDevelopment(Board board, bool forWhite)
     {
-        int isWhite
-        PieceList knights = board.GetAllPieceLists()[2 + ];
+        //int isWhite
+        //PieceList knights = board.GetAllPieceLists()[2 + ];
 
+        return 0;
     }
 }
