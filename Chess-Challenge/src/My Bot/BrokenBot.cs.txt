@@ -1,4 +1,4 @@
-﻿using ChessChallenge.API;
+using ChessChallenge.API;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,84 +12,81 @@ public class MyBot : IChessBot
 {
     int[] pieceValues = { 0, 90, 290, 310, 500, 910, 100000 };
 
-    int MAX_DEPTH = 5;
+    int MOVE_TIME_MS = 5000;
+    // int CLEAR_TRANSPOSITION_TABLE_AFTER_PLY = 4;
+
     int positionalEvalMultiplier = 1;
 
     int gamePhase = 0;
     int nodes = 0;
-    
+
+    Move currentBestMove;
+    int currentBestEval;
+    MoveEval[] currentPV;
+    int depthSearched;
+
+    string pvToString() {
+        string pvString = "";
+        foreach (MoveEval moveEval in currentPV) {
+            if (moveEval._move.ToString().Equals("Move: 'Null'")) break;
+            pvString += moveEval._move.ToString() + " ";
+        }
+        return pvString;
+    }
+
     public Move Think(Board board, Timer timer)
     {
-        if(!board.IsWhiteToMove){
-            switch(board.PlyCount/2){
-                case 0: return new Move("g7g6", board);
-                case 1: return new Move("f8g7", board);
-            }
-        } else {
-            switch(board.PlyCount/2){
-                case 0: return new Move("d2d4", board);
-                case 1:
-                    if(board.GetLegalMoves().Contains(new Move("c1f4", board)))
-                        return new Move("c1f4", board); 
-                    break;
-            }
-        }
         // Reset classparams for new search
         gamePhase = getGamePhase(board);
         nodes = 0;
+        depthSearched = 0;
 
-        int mySide = board.IsWhiteToMove? 1 : -1;
-        int bestEval = -1000000 * mySide;
-        Move currentBestMove = new();
-
-        foreach (Move move in orderMoves(board)) {
-            board.MakeMove(move);
-            int moveEval = minimax(board, MAX_DEPTH, -1000000, 1000000, board.IsWhiteToMove);
-
-            if (moveEval * mySide >= bestEval * mySide) {
-                bestEval = moveEval;
-                currentBestMove = move;
-            }
-            board.UndoMove(move);
-        }
-
-        Console.WriteLine("eval \x1b[34m" + bestEval + "\x1b[0m Nodes \x1b[35m" + nodes + "\x1b[0m");
+        MainSearch(board, timer);
+        /*
+        MainSearch should set:
+        currentBestMove
+        currentBestEval
+        currentPV
+        depthSearched
+        */
+        currentPV[0] = new MoveEval { _move = currentBestMove, _eval = currentBestEval };
+        Console.WriteLine("eval \x1b[34m" + currentBestEval + "\x1b[0m Nodes \x1b[35m" + nodes + "\x1b[0m pv \x1b[33m" + pvToString() + "\x1b[0mdepth \x1b[32m" + depthSearched + "\x1b[0m");
         return currentBestMove;
     }
 
-    // void MainSearch(Board position, Timer timer) {
-    //     // Iterative deepening search
-    //     int mySide = position.IsWhiteToMove? 1 : -1;
-// 
-    //     int bestEval = -1000000 * mySide;
-    //     Move bestMoveFound = new();
-    //     
-    //     while (true) {
-// 
-    //         // At each depth, clear pv
-    //         currentPV = new MoveEval[depthSearched + 1];
-// 
-    //         foreach (Move move in orderMoves(position)) {
-    //             position.MakeMove(move);
-    //             int moveEval = minimax(position, depthSearched, -1000000, 1000000, position.IsWhiteToMove);
-// 
-    //             if (moveEval * mySide >= bestEval * mySide) {
-    //                 bestEval = moveEval;
-    //                 bestMoveFound = move;
-    //             }
-    //             position.UndoMove(move);
-    //         }
-// 
-    //         // Done with this depth, update the current best move and eval
-    //         depthSearched++;
-    //         currentBestMove = bestMoveFound;
-    //         currentBestEval = bestEval;
-// 
-    //         if (timer.MillisecondsElapsedThisTurn > MOVE_TIME_MS) return;
-// 
-    //         // position.MakeMove(bestMoveFound);
-    //     }
-    // }
+    void MainSearch(Board position, Timer timer) {
+        // Iterative deepening search
+        int mySide = position.IsWhiteToMove? 1 : -1;
+
+        int bestEval = -1000000 * mySide;
+        Move bestMoveFound = new();
+        
+        while (true) {
+
+            // At each depth, clear pv
+            currentPV = new MoveEval[depthSearched + 1];
+
+            foreach (Move move in orderMoves(position)) {
+                position.MakeMove(move);
+                int moveEval = minimax(position, depthSearched, -1000000, 1000000, position.IsWhiteToMove);
+
+                if (moveEval * mySide >= bestEval * mySide) {
+                    bestEval = moveEval;
+                    bestMoveFound = move;
+                }
+                position.UndoMove(move);
+            }
+
+            // Done with this depth, update the current best move and eval
+            depthSearched++;
+            currentBestMove = bestMoveFound;
+            currentBestEval = bestEval;
+
+            if (timer.MillisecondsElapsedThisTurn > MOVE_TIME_MS) return;
+
+            // position.MakeMove(bestMoveFound);
+        }
+    }
     
     
 
@@ -132,21 +129,18 @@ public class MyBot : IChessBot
         foreach(Piece P in allPieceLists[0].Concat(allPieceLists[6])){
             openFiles[P.Square.File] = 1;
 
-            if(getGamePhase(board) < 3 && (BitboardHelper.GetPawnAttacks(P.Square, P.IsWhite) & 0b0000000000000000000000000001100000011000000000000000000000000000) != 0)
-                eval += 4 * (P.IsWhite? 1 : -1) * positionalEvalMultiplier;
-            
-            if(Math.Abs(P.Square.Rank - 3.5) == 0.5 && Math.Abs(P.Square.File - 3.5) == 0.5)
-                eval += 8 * (P.IsWhite? 1 : -1) * positionalEvalMultiplier;
+            if(getGamePhase(board) < 4 && ((BitboardHelper.GetPawnAttacks(P.Square, P.IsWhite) & 0b0000000000000000000000000001100000011000000000000000000000000000) != 0))
+                eval += 7 * (P.IsWhite? 1 : -1) * positionalEvalMultiplier;
         }
 
         //CHECK KNIGHT CONTROL OF CENTER
         foreach(Piece N in allPieceLists[1].Concat(allPieceLists[7]))
-            if(getGamePhase(board) < 3 && (BitboardHelper.GetKnightAttacks(N.Square) & 0b0000000000000000000000000001100000011000000000000000000000000000) != 0)
+            if(getGamePhase(board) < 4 && (BitboardHelper.GetKnightAttacks(N.Square) & 0b0000000000000000000000000001100000011000000000000000000000000000) != 0)
                 eval += 6 * (N.IsWhite? 1 : -1) * positionalEvalMultiplier;
 
         //CHECK BISHOP CONTROL OF CENTER
         foreach(Piece B in allPieceLists[2].Concat(allPieceLists[8]))
-            if(getGamePhase(board) < 3 && (BitboardHelper.GetSliderAttacks(PieceType.Bishop, B.Square, board.AllPiecesBitboard) & 0b0000000000000000000000000001100000011000000000000000000000000000) != 0)
+            if(getGamePhase(board) < 4 && (BitboardHelper.GetSliderAttacks(PieceType.Bishop, B.Square, board.AllPiecesBitboard) & 0b0000000000000000000000000001100000011000000000000000000000000000) != 0)
                 eval += 5 * (B.IsWhite? 1 : -1) * positionalEvalMultiplier;
 
         //MOVE ROOKS TO OPEN FILES 
@@ -197,9 +191,9 @@ public class MyBot : IChessBot
         List<Move> moves = Enumerable.ToList(board.GetLegalMoves());
         List<Move> interestingMoves = new();
 
-        // if (currentBestMove != null && moves.Contains(currentBestMove)) {
-        //     interestingMoves.Add(currentBestMove);
-        // }
+        if (currentBestMove != null && moves.Contains(currentBestMove)) {
+            interestingMoves.Add(currentBestMove);
+        }
 
         interestingMoves.AddRange(moves.Where(m => {
             board.MakeMove(m);
@@ -273,7 +267,6 @@ public class MyBot : IChessBot
             //discourage bad moves like Kf8 in the opening and middlegame
             int moveBonus = ((move.MovePieceType == PieceType.King && !move.IsCastles && gamePhase < 3)? -100 : 0) * positionalEvalMultiplier;
             if (move.IsPromotion) moveBonus += 300 * positionalEvalMultiplier;
-            if((move.StartSquare.Rank - move.TargetSquare.Rank) * (white? 1 : -1) < 0) moveBonus -= 5 * positionalEvalMultiplier;
 
             position.MakeMove(move);
             int eval = minimax(position, depth - 1, alpha, beta, !white);
@@ -282,6 +275,7 @@ public class MyBot : IChessBot
             if (white) {
                 if (eval > bestEval) {
                     bestEval = eval;
+                    currentPV[depth] = new MoveEval { _move = move, _eval = eval };
                 }
 
                 bestEval += moveBonus;
@@ -290,6 +284,7 @@ public class MyBot : IChessBot
 
                 if (eval < bestEval) {
                     bestEval = eval;
+                    currentPV[depth] = new MoveEval { _move = move, _eval = eval };
                 }
 
                 bestEval -= moveBonus;
