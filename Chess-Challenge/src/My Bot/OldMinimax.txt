@@ -1,0 +1,112 @@
+SearchResult minimax(Board position, int depth, int alpha, int beta, bool white, int depthFromRoot = 0) {
+        nodes++;
+
+        if (position.IsDraw()) {
+            // Console.WriteLine("Draw found by position.isdraw() in minimax");
+            return new SearchResult {
+                Evaluation = 0,
+                PrincipalVariation = new List<Move>()
+            };
+        }
+
+        if (depth == 0 || depthFromRoot >= MAX_DEPTH_EXTENSION)
+            return new SearchResult {
+                Evaluation = staticEval(position),
+                PrincipalVariation = new List<Move>()
+            };
+        
+
+        List<Move> orderedMoves = orderMoves(position);
+        
+        //if (orderedMoves.Count == 0) { // If there are no legal moves, return +-1000000 if checkmate, 0 if stalemate
+            // else
+            //     return new SearchResult {
+            //         Evaluation = 0,
+            //         PrincipalVariation = new List<Move>()
+            //     };
+        //}
+
+        int bestEval = white ? -1000000 : 1000000;
+        Move bestMoveFound = new Move();
+        List<Move> bestPV = new List<Move>();
+
+        //int count = 0;
+        foreach (Move move in orderedMoves) {
+            //count++;
+
+            int ifWhite = white? 1 : -1;
+            // discourage bad moves like Kf8 & Nf6 -> Ng8 in the opening and middlegame
+            int moveBonus = ((move.MovePieceType == PieceType.King && !move.IsCastles && gamePhase < 3)? -100 : 0) * positionalEvalMultiplier;
+            if (move.IsPromotion) moveBonus += 300 * positionalEvalMultiplier;
+            if((move.StartSquare.Rank - move.TargetSquare.Rank) * ifWhite < 0 && getGamePhase(position) < 3) moveBonus -= 6 * positionalEvalMultiplier;
+            if((move.StartSquare.Rank != 0 || move.StartSquare.Rank != 8 || move.MovePieceType != PieceType.Pawn) && getGamePhase(position) < 2) moveBonus -= 6 * positionalEvalMultiplier;
+            
+            position.MakeMove(move);
+
+            if (position.IsInCheckmate()) {
+                Console.WriteLine("Checkmate found in minimax at depthFromRoot " + depthFromRoot + " current mateIn = " + mateIn);
+                // Set classvar mateIn to the depth from root at which the mate was found
+                // But if we find out later that it isn't forced, we just set it to 0
+                mateIn = Math.Min(mateIn, depthFromRoot);
+                position.UndoMove(move);
+                return new SearchResult {
+                    Evaluation = 1000000 * (position.IsWhiteToMove ? -1 : 1),
+                    PrincipalVariation = new List<Move>() { move }
+                };
+            }
+
+            SearchResult sr = minimax(position, depth - 1, alpha, beta, !white, depthFromRoot + 1);
+            int eval = sr.Evaluation;
+            position.UndoMove(move);
+            
+            if (white) {
+                eval += moveBonus;
+                if (eval >= bestEval) {
+                    bestEval = eval;
+                    bestMoveFound = move;
+                    bestPV = sr.PrincipalVariation;
+                }
+                alpha = Math.Max(alpha, eval);
+            } else {
+
+                eval -= moveBonus;
+                if (eval <= bestEval) {
+                    // Console.WriteLine("eval " + eval + " is overwriting bestEval " + bestEval);
+                    bestEval = eval;
+                    bestMoveFound = move;
+                    bestPV = sr.PrincipalVariation;
+                }
+                beta = Math.Min(beta, eval);
+            }
+            if (beta < alpha)
+                break;
+        }
+
+        bestPV.Insert(0, bestMoveFound);
+        // Check for forced mate;
+        // If beta stays really high, that means black can't avoid getting mated
+        // If alpha stays really low, that means white can't avoid getting mated
+
+        
+        if (!white && beta >= 900000) {
+            Console.WriteLine("white# at dRoot " + depthFromRoot + " dLeft " + depth + " by beta = " + beta);
+            return new SearchResult {
+                Evaluation = 1000000,
+                PrincipalVariation = new List<Move>()
+            };
+        } else if (white && alpha <= -900000) {
+            Console.WriteLine("black# at dRoot " + depthFromRoot + " dLeft " + depth + " by alpha = " + alpha);
+            return new SearchResult {
+                Evaluation = -1000000,
+                PrincipalVariation = new List<Move>()
+            };
+        }
+        mateIn = Int32.MaxValue; // Not a forced mate; both alpha (white) and beta (black) can achieve less extreme evals
+
+        // bestPV.Insert(0, bestMoveFound);
+        return new SearchResult {
+            Evaluation = bestEval,
+            PrincipalVariation = bestPV
+        };
+    }
+    
