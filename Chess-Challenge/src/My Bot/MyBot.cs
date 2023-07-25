@@ -10,7 +10,7 @@ public class TranspositionTableObject {
 public class MyBot : IChessBot {
     # region CLASSVARS
     Dictionary<ulong, TranspositionTableObject> TranspositionTable = new (); // Lookup duplicate positions for speed
-    int[] pieceValues = { 0, 90, 290, 310, 500, 910, 0 }; // Null P N B R Q K, can be changed based on gamephase
+    int[] pieceValues = { 0, 95, 290, 310, 470, 910, 0 }; // Null P N B R Q K, can be changed based on gamephase
     int MAX_THINK_TIME = 4000; // milliseconds
     int DEPTH_EXTENSION_LIMIT = 4; // how many times we can extend the search for checks
     int TT_SIZE_LIMIT = 10_000_000; // Board keys are 8 bytes, SearchResult is list of ~5 moves of 2 bytes each ~= 18 bytes per entry
@@ -60,6 +60,8 @@ public class MyBot : IChessBot {
         foreach (Piece P in board.GetAllPieceLists()[6])
             blackPawnAttacksBitboard |= BitboardHelper.GetPawnAttacks(P.Square, false);
 
+        if (gamePhase > 3) pieceValues = new int[] { 0, 120, 285, 320, 560, 910, 0 }; // pawns and rooks much more important
+
         __nodes = 0;
         __transpositionLookups = 0;
 
@@ -76,14 +78,6 @@ public class MyBot : IChessBot {
         int currentDeepestEval = playingWhite? -1999999 : 1999999;
 
         while (true) {            
-            // The current depth will finish searching, so it may go over the time limit for now
-            currentDeepestEval = Search(board, searchDepth, 0, -2999999, 2999999, true);
-            searchDepth++;
-
-            bestMove = pv[0];
-
-            string pvWithoutNulls = string.Join(" ", pv.Where(x => !x.Equals(Move.NullMove)).Select(x => x.ToString()));
-            Console.WriteLine("\u001b[48;5;130mdepth " + (searchDepth-1) + "\x1b[0m bestmove\x1b[32m " + bestMove + "\x1b[37m eval \x1b[36m" + getDisplayEval(currentDeepestEval) + "\x1b[37m nodes \x1b[35m" + __nodes + "\x1b[37m lookups\x1b[34m " + __transpositionLookups + "\x1b[37m tablesize\x1b[31m " + TranspositionTable.Count + "\x1b[37m time \x1b[2m" + timer.MillisecondsElapsedThisTurn + "ms \x1b[37m\x1b[0mpv \x1b[33m" + pvWithoutNulls + "\x1b[37m");
 
             // If it is mate there is no point in searching deeper
             if (timer.MillisecondsElapsedThisTurn > MAX_THINK_TIME || IsMate(currentDeepestEval)) { 
@@ -91,6 +85,14 @@ public class MyBot : IChessBot {
                 searchDepth--;
                 break;
             }
+
+            currentDeepestEval = Search(board, searchDepth, 0, -2999999, 2999999, playingWhite);
+            searchDepth++;
+
+            bestMove = pv[0];
+
+            string pvWithoutNulls = string.Join(" ", pv.Where(x => !x.Equals(Move.NullMove)).Select(x => x.ToString()));
+            Console.WriteLine("\u001b[48;5;130mdepth " + (searchDepth-1) + "\x1b[0m bestmove\x1b[32m " + bestMove + "\x1b[37m eval \x1b[36m" + getDisplayEval(currentDeepestEval) + "\x1b[37m nodes \x1b[35m" + __nodes + "\x1b[37m lookups\x1b[34m " + __transpositionLookups + "\x1b[37m tablesize\x1b[31m " + TranspositionTable.Count + "\x1b[37m time \x1b[2m" + timer.MillisecondsElapsedThisTurn + "ms \x1b[37m\x1b[0mpv \x1b[33m" + pvWithoutNulls + "\x1b[37m");
         }
     }
     int staticEval(Board board) {
@@ -261,9 +263,11 @@ public class MyBot : IChessBot {
 
         __nodes++;
 
-        if (board.IsInCheckmate()) return 1000000 * -sideNegator;
-        if (board.IsDraw()) return 1;
-        if (depthRemaining == 0) return QuiescenceSearch(board, whiteGuaranteed, blackGuaranteed, white);
+        int dynamicSideNegator = board.IsWhiteToMove? 1 : -1;
+
+        if (board.IsInCheckmate()) return 1000000 * -dynamicSideNegator;
+        if (board.IsDraw()) return 0;
+        if (depthRemaining == 0) return staticEval(board);//QuiescenceSearch(board, whiteGuaranteed, blackGuaranteed, white);
 
         List<Move> orderedMoves = bestMove.Equals(Move.NullMove) || playingWhite != white || depthFromRoot > 0? 
             OrderMoves(board, new List<Move>()) : 
@@ -273,19 +277,13 @@ public class MyBot : IChessBot {
         Move bestMoveFound = Move.NullMove;
         // Loop through child positions
         foreach (Move move in orderedMoves) {
-
-            // Discourage king moves in < middle-endgame
-            int moveBonus = ((move.MovePieceType == PieceType.King && !move.IsCastles && gamePhase < 3)? -125 : 0) * positionalEvalMultiplier;
-
-            // Promotions are good
-            if (move.IsPromotion) moveBonus += 300 * positionalEvalMultiplier;
-
-            // Moving backwards is bad in < middle-endgame
-            if((move.StartSquare.Rank - move.TargetSquare.Rank) * -sideNegator < 0 && getGamePhase(board) < 3) moveBonus -= 60 * positionalEvalMultiplier;
-
             board.MakeMove(move);
             int resultEval; // initialize here because of transposition table
 
+            // In early/midgame: kings moves bad, promotions good, move backwards bad, having less moves bad
+            int moveBonus = ((move.MovePieceType == PieceType.King && !move.IsCastles && gamePhase < 3)? -125 : 0) * positionalEvalMultiplier;
+            if (move.IsPromotion) moveBonus += 300 * positionalEvalMultiplier;
+            if ((move.StartSquare.Rank - move.TargetSquare.Rank) * -dynamicSideNegator < 0 && getGamePhase(board) < 3) moveBonus -= 60 * positionalEvalMultiplier;
             moveBonus += 4 * gamePhase * gamePhase + 50 - board.GetLegalMoves().Length * 2;
 
             // Lookup position in table
@@ -297,11 +295,11 @@ public class MyBot : IChessBot {
                 // Search extension for checks
                 int extension = board.IsInCheck() && numExtensions < DEPTH_EXTENSION_LIMIT? 1 : 0;
                 resultEval = Search(board, depthRemaining - 1 + extension, depthFromRoot + 1, whiteGuaranteed, blackGuaranteed, !white, numExtensions + extension);
+
                 // Don't add moveBonus to mate evals, that will screw up mate depth
                 // Also don't add multiple times; only add at the first depth
-                if (!IsMate(resultEval) && depthFromRoot == 0) resultEval += moveBonus * sideNegator;
+                if (!IsMate(resultEval) && depthFromRoot == 0) resultEval += 0 * moveBonus * dynamicSideNegator;
 
-                
                 TranspositionTable.TryAdd(
                     board.ZobristKey,
                     new TranspositionTableObject {
@@ -315,46 +313,48 @@ public class MyBot : IChessBot {
             board.UndoMove(move);
             resultEval = TryIncreaseMateDepth(resultEval);
 
-            // alpha-beta stuff
-            int checkForSet = white? whiteGuaranteed : blackGuaranteed; 
-
-            // stop searching if the result is so good that the opponent will never allow it
-            if ((white && resultEval > blackGuaranteed - 1 * sideNegator) ||
-                (!white && resultEval < whiteGuaranteed - 1 * sideNegator)) {
-                // pv[depthFromRoot] = move; this might be wrong, since we are stopping the search and this 
-                // move will never be allowed to be an option
-                return resultEval;
-            }
-
-            // max/min for alpha/beta
-            if (resultEval > checkForSet - 1 * sideNegator) {
-                if (white) whiteGuaranteed = resultEval;
-                else blackGuaranteed = resultEval;
-            }
-
             // Comparing regular evals
             // See comments in SearchResult class for mate representation
             if (white? resultEval > bestEvalFound : resultEval < bestEvalFound) {
                 bestEvalFound = resultEval;
                 bestMoveFound = move;
             }
+
+            // stop searching if the result is so good that the opponent will never allow it
+            if ((white && resultEval > blackGuaranteed - 1 * dynamicSideNegator) ||
+                (!white && resultEval < whiteGuaranteed - 1 * dynamicSideNegator)) {
+                return resultEval;
+            }
+
+            // Update alpha/beta
+            if (white) whiteGuaranteed = Math.Max(whiteGuaranteed, resultEval);
+            else blackGuaranteed = Math.Min(blackGuaranteed, resultEval);
         }
 
         pv[depthFromRoot] = bestMoveFound;
         return bestEvalFound;
     }
-    int QuiescenceSearch(Board board, int alpha, int beta, bool white) {
-        int stand = staticEval(board); 
-        if (stand >= beta) return beta * sideNegator;
-        alpha = Math.Max(alpha, stand);
+    
+    int QuiescenceSearch(Board board, int whiteGuaranteed, int blackGuaranteed, bool white) {
+        int eval = staticEval(board);
+
+        if (white && eval >= whiteGuaranteed) return eval;
+        if (!white && eval <= blackGuaranteed) return eval;
 
         foreach (Move move in OrderMoves(board, new List<Move>(), true)) {
             board.MakeMove(move);
-            int score = -QuiescenceSearch(board, -beta, -alpha, !white);
+            int score = -QuiescenceSearch(board, -blackGuaranteed, -whiteGuaranteed, !white);
             board.UndoMove(move);
-            if (score >= beta) return beta * sideNegator;
-            alpha = Math.Max(alpha, score);
+
+            if (white) {
+                if (score >= whiteGuaranteed) return whiteGuaranteed;
+                whiteGuaranteed = Math.Max(whiteGuaranteed, eval);
+            } else {
+                if (score <= blackGuaranteed) return blackGuaranteed;
+                blackGuaranteed = Math.Min(blackGuaranteed, eval);
+            }
         }
-        return alpha * sideNegator;
+        return eval;
     }
+    
 }
