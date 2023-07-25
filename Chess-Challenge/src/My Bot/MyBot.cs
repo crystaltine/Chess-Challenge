@@ -155,6 +155,8 @@ public class MyBot : IChessBot {
                 }
             }
         }
+        
+        // TODO - VALUE OUTPOSTS MORE (PIECES ON OPPONENTS SIDE SUPPORTED BY PAWNS)
 
         int[] openFiles = new int[8];
         //PUSH CENTER PAWNS
