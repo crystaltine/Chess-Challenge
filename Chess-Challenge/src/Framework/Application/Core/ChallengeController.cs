@@ -3,6 +3,7 @@
 using Raylib_cs;
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
@@ -22,6 +23,7 @@ namespace ChessChallenge.Application
         }
 
         // Game state
+        Random rng;
         int gameID;
         bool isPlaying;
         Board board;
@@ -59,6 +61,7 @@ namespace ChessChallenge.Application
             tokenCount = GetTokenCount();
             Warmer.Warm();
 
+            rng = new Random();
             moveGenerator = new();
             boardUI = new BoardUI();
             board = new Board();
@@ -66,7 +69,7 @@ namespace ChessChallenge.Application
 
             BotStatsA = new BotMatchStats("IBot");
             BotStatsB = new BotMatchStats("IBot");
-            botMatchStartFens = FileHelper.ReadResourceFile("Fens.txt").Split('\n');
+            botMatchStartFens = FileHelper.ReadResourceFile("Fens.txt").Split('\n').Where(fen => fen.Length > 0).ToArray();
             botTaskWaitHandle = new AutoResetEvent(false);
 
             //StartNewGame(PlayerType.Human, PlayerType.MyBot);
@@ -77,7 +80,7 @@ namespace ChessChallenge.Application
         {
             // End any ongoing game
             EndGame(GameResult.DrawByArbiter, log: false, autoStartNextBotMatch: false);
-            gameID++;
+            gameID = rng.Next();
 
             // Stop prev task and create a new one
             if (RunBotsOnSeparateThread)
@@ -141,12 +144,10 @@ namespace ChessChallenge.Application
 
         Move GetBotMove()
         {
-            // Board b = new Board();
-            // b.LoadPosition(FenUtility.CurrentFen(board));
-            API.Board botBoard = new(new(board));
+            API.Board botBoard = new(board);
             try
             {
-                API.Timer timer = new(PlayerToMove.TimeRemainingMs);
+                API.Timer timer = new(PlayerToMove.TimeRemainingMs, PlayerNotOnMove.TimeRemainingMs, GameDurationMilliseconds);
                 API.Move move = PlayerToMove.Bot.Think(botBoard, timer);
                 return new Move(move.RawValue);
             }
@@ -276,6 +277,7 @@ namespace ChessChallenge.Application
             {
                 isPlaying = false;
                 isWaitingToPlayMove = false;
+                gameID = -1;
 
                 if (log)
                 {
@@ -414,6 +416,8 @@ namespace ChessChallenge.Application
 
 
         ChessPlayer PlayerToMove => board.IsWhiteToMove ? PlayerWhite : PlayerBlack;
+        ChessPlayer PlayerNotOnMove => board.IsWhiteToMove ? PlayerBlack : PlayerWhite;
+
         public int TotalGameCount => botMatchStartFens.Length * 2;
         public int CurrGameNumber => Math.Min(TotalGameCount, botMatchGameIndex + 1);
         public string AllPGNs => pgns.ToString();
