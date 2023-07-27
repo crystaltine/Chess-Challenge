@@ -50,7 +50,7 @@ public class EvilBot : IChessBot
             board.MakeMove(move);
 
             int eval = minimax(board, MAX_DEPTH_PLY, -1000000, 1000000, board.IsWhiteToMove);
-            // Console.WriteLine("\x1b[0m" + move.ToString() + " Eval: \x1b[32m" + eval + "\x1b[0m");
+            Console.WriteLine("\x1b[0m" + move.ToString() + " Eval: \x1b[32m" + eval + "\x1b[0m");
             if (eval * mySide >= bestEval * mySide)
             {
                 bestEval = eval;
@@ -96,12 +96,12 @@ public class EvilBot : IChessBot
         // Get the material difference between the two sides
         // Positive if white is ahead, negative if black is ahead
         PieceList[] allPieceLists = board.GetAllPieceLists();
-        // int[] openFiles = new int[8];
+        int[] openFiles = new int[8];
 
         for (int i = 0; i < allPieceLists.Length; i++)  
             eval += (pieceValues[i % 6 + 1] * allPieceLists[i].Count) * (i < 6? 1 : -1);
 
-        /*
+        
         //PUSH CENTER PAWNS
         foreach(Piece P in allPieceLists[0].Concat(allPieceLists[6])){
             openFiles[P.Square.File] = 1;
@@ -125,7 +125,7 @@ public class EvilBot : IChessBot
             if(getGamePhase(board) >= 4 && (R.Square.Rank == 3.5 + 2.5 * (R.IsWhite? 1 : -1)))
                 eval += 10 * (R.IsWhite? 1 : -1) * nonMaterialEvalMultiplier;
         }
-        */
+        
 
         return eval;
     }

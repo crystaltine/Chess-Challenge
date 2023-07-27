@@ -69,7 +69,8 @@ namespace ChessChallenge.Application
             botMatchStartFens = FileHelper.ReadResourceFile("Fens.txt").Split('\n');
             botTaskWaitHandle = new AutoResetEvent(false);
 
-            StartNewGame(PlayerType.MyBot, PlayerType.Human);
+            //StartNewGame(PlayerType.Human, PlayerType.MyBot);
+            StartNewGame(PlayerType.Human, PlayerType.MyBot);
         }
 
         public void StartNewGame(PlayerType whiteType, PlayerType blackType)
@@ -92,7 +93,7 @@ namespace ChessChallenge.Application
             bool isGameWithHuman = whiteType is PlayerType.Human || blackType is PlayerType.Human;
             int fenIndex = isGameWithHuman ? 0 : botMatchGameIndex / 2;
             board.LoadPosition(botMatchStartFens[fenIndex]);
-            //board.LoadPosition("8/k7/3p4/p2P1p2/P2P1P2/8/8/K7 w - - 0 1");
+            //board.LoadPosition("rnbk1b1r/p1pBpppp/5n2/3P4/8/2N5/PPPP1PPP/R1BQK1NR b KQ - 0 6");
 
             // Player Setup
             PlayerWhite = CreatePlayer(whiteType);

@@ -1,4 +1,4 @@
-﻿using ChessChallenge.API;
+using ChessChallenge.API;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -76,17 +76,17 @@ public class EvaluationFunctions {
 
         for (int i = 0; i < 6; i++) {
             int numEscapesControlledByPiece = BitboardHelper.GetNumberOfSetBits(opponentAttacks[i] & kingSurroundings);
-            kingSafetyEval += numEscapesControlledByPiece * piecesAttackingKingAreaEvals[i] * (5-gPhase) / 2;
+            kingSafetyEval += numEscapesControlledByPiece * piecesAttackingKingAreaEvals[i] * (5-gPhase) / 3;
         }
         // Going away from 1st rank is bad until endgame
-        if (gPhase < 4 && kingLoc.Rank != (whiteKing? 0:7)) kingSafetyEval -= 8 * (5-gPhase);
+        if (gPhase < 4 && kingLoc.Rank != (whiteKing? 0:7)) kingSafetyEval -= 36 * (5-gPhase);
 
         // If there isn't at least 1 pawn/piece in the king's front diagonal 2 squares, that's bad
         if (gPhase < 4 && ((BitboardHelper.GetPawnAttacks(kingLoc, whiteKing) & board.GetPieceBitboard(PieceType.Pawn, whiteKing)) == 0)) 
-            kingSafetyEval -= 23 * (5-gPhase);
+            kingSafetyEval -= 63 * (5-gPhase);
 
         // If the king is on an open file, that's bad (if before endgame)
-        if (gPhase < 4 && openFiles[kingLoc.File] == 0) kingSafetyEval -= 21 * (5-gPhase);
+        if (gPhase < 4 && openFiles[kingLoc.File] == 0) kingSafetyEval -= 31 * (5-gPhase);
 
         return kingSafetyEval * (whiteKing? 1 : -1);
     }
@@ -103,7 +103,7 @@ public class MyBot : IChessBot {
     # region CLASSVARS
     Dictionary<ulong, TranspositionTableObject> TranspositionTable = new (); // Lookup duplicate positions for speed
     int[] pieceValues = { 0, 95, 290, 310, 470, 910, 0 }; // Null P N B R Q K, can be changed based on gamephase
-    int THINK_TIME = 5000; // milliseconds
+    int MAX_THINK_TIME = 5000; // milliseconds
     int DEPTH_EXTENSION_LIMIT = 4; // how many times we can extend the search for checks
     int TT_SIZE_LIMIT = 10_000_000; // Board keys are 8 bytes, SearchResult is list of ~5 moves of 2 bytes each ~= 18 bytes per entry
     int positionalEvalMultiplier = 1; // how much non-material based evals are worth
@@ -195,16 +195,16 @@ public class MyBot : IChessBot {
                     bestMoveFoundThisDepth = move;
                     result.PV.Add(move);
                     result.PV.Reverse();
-                    bestMovePV = result.PV; 
+                    bestMovePV = result.PV; // We could add on the move we just made to the PV, but it's not necessary since it gets played anyways
                 }
 
-                if (timer.MillisecondsElapsedThisTurn > THINK_TIME) {
-                    searchCanceled = true;
-                    break;
-                }
+                if (searchCanceled) break;
             }
 
-            if (bestMoveFoundThisDepth.Equals(Move.NullMove)) break; // no moves found, so break out of loop and use the previous depth's best move
+            //if (bestMoveFoundThisDepth.Equals(Move.NullMove) || searchCanceled || timer.MillisecondsElapsedThisTurn > MAX_THINK_TIME) { //timer&searchcanceled is here debug for now
+            //    //searchDepth--;
+            //    break;
+            //}
 
             string timeString = "\x1b[37mtime\u001b[38;5;214m " + timer.MillisecondsElapsedThisTurn + "ms\x1b[37m\x1b[0m";
             timeString += string.Concat(Enumerable.Repeat(" ", 38 - timeString.Length));
@@ -226,8 +226,12 @@ public class MyBot : IChessBot {
             bestMove = bestMoveFoundThisDepth;
             bestMoveEval = bestEvalFoundThisDepth;
 
-            if (searchCanceled || IsMate(bestMoveEval))
+            if (bestMoveFoundThisDepth.Equals(Move.NullMove) || searchCanceled || timer.MillisecondsElapsedThisTurn > MAX_THINK_TIME) { //timer&searchcanceled is here debug for now
+                //searchDepth--;
                 break;
+            }
+
+            if (IsMate(bestMoveEval) || searchCanceled) break;
         }
         return searchDepth;
     }
@@ -305,8 +309,6 @@ public class MyBot : IChessBot {
 
         int[] openFiles = new int[8]; // 0 = open, 1 = closed
         
-        // TODO - outposts, development, doubled and isolated pawns
-
         // Push center pawns and update open files
         foreach(Piece P in allPieceLists[0].Concat(allPieceLists[6])) {
             openFiles[P.Square.File] = 1;
@@ -408,6 +410,7 @@ public class MyBot : IChessBot {
         return alpha;
     }
     SearchResult Search_V4(Board board, int depthRemaining, int depthFromRoot, int alpha, int beta, bool maximizing, int numExtensions = 0) {
+
         __nodes++;
         int dynamicSideNegator = board.IsWhiteToMove? 1 : -1;
 

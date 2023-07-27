@@ -1,0 +1,27 @@
+***************
+NOTES!!!
+
+This QS returns a relative eval; when using, it should be multiplied by dynamicSideNegator.
+
+sideNegator = board.IsWhiteToMove? 1 : -1;
+playingWhite = board.IsWhiteToMove;        v alpha  v beta 
+Console.WriteLine(QuiescenceSearch(board, -2999999, 2999999)*sideNegator);
+Console.WriteLine("^ " + (playingWhite? "real value" : "negated value"));
+
+int QuiescenceSearch(Board board, int alpha, int beta) {
+        int staticEval = Evaluate(board) * (board.IsWhiteToMove? 1 : -1);
+
+        if (staticEval >= beta) return beta;
+        alpha = Math.Max(alpha, staticEval);
+
+        foreach(Move m in OrderMoves(board, new List<Move>(), true))  {
+            board.MakeMove(m);
+            int score = -QuiescenceSearch(board, -beta, -alpha);
+            board.UndoMove(m);
+
+            if (score >= beta) return beta;
+            alpha = Math.Max(alpha, score);
+        }
+
+        return alpha;
+    }
