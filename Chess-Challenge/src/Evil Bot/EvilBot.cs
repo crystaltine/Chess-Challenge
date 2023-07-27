@@ -1,247 +1,153 @@
 ﻿using ChessChallenge.API;
 using System;
-using System.Collections.Generic;
-using System.Linq;
 
 public class EvilBot : IChessBot
 {
-    int[] pieceValues = { 0, 100, 290, 310, 500, 910, 100000 };
-    int MAX_DEPTH_PLY;
-    // int CLEAR_TRANSPOSITION_TABLE_AFTER_PLY = 4;
+    Move bestmoveRoot = Move.NullMove;
 
-    int nonMaterialEvalMultiplier = 1;
+    // https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function
+    int[] pieceVal = {0, 100, 310, 330, 500, 1000, 10000 };
+    int[] piecePhase = {0, 0, 1, 1, 2, 4, 0};
+    ulong[] psts = {657614902731556116, 420894446315227099, 384592972471695068, 312245244820264086, 364876803783607569, 366006824779723922, 366006826859316500, 786039115310605588, 421220596516513823, 366011295806342421, 366006826859316436, 366006896669578452, 162218943720801556, 440575073001255824, 657087419459913430, 402634039558223453, 347425219986941203, 365698755348489557, 311382605788951956, 147850316371514514, 329107007234708689, 402598430990222677, 402611905376114006, 329415149680141460, 257053881053295759, 291134268204721362, 492947507967247313, 367159395376767958, 384021229732455700, 384307098409076181, 402035762391246293, 328847661003244824, 365712019230110867, 366002427738801364, 384307168185238804, 347996828560606484, 329692156834174227, 365439338182165780, 386018218798040211, 456959123538409047, 347157285952386452, 365711880701965780, 365997890021704981, 221896035722130452, 384289231362147538, 384307167128540502, 366006826859320596, 366006826876093716, 366002360093332756, 366006824694793492, 347992428333053139, 457508666683233428, 329723156783776785, 329401687190893908, 366002356855326100, 366288301819245844, 329978030930875600, 420621693221156179, 422042614449657239, 384602117564867863, 419505151144195476, 366274972473194070, 329406075454444949, 275354286769374224, 366855645423297932, 329991151972070674, 311105941360174354, 256772197720318995, 365993560693875923, 258219435335676691, 383730812414424149, 384601907111998612, 401758895947998613, 420612834953622999, 402607438610388375, 329978099633296596, 67159620133902};
 
-    int gamePhase = 0;
+    // https://www.chessprogramming.org/Transposition_Table
+    struct TTEntry {
+        public ulong key;
+        public Move move;
+        public int depth, score, bound;
+        public TTEntry(ulong _key, Move _move, int _depth, int _score, int _bound) {
+            key = _key; move = _move; depth = _depth; score = _score; bound = _bound;
+        }
+    }
 
-    // Store zobrist hash values : abs. evaluation
-    Dictionary<ulong, int> transpositionTable = new Dictionary<ulong, int>();
+    const int entries = (1 << 20);
+    TTEntry[] tt = new TTEntry[entries];
+
+    public int getPstVal(int psq) {
+        return (int)(((psts[psq / 10] >> (6 * (psq % 10))) & 63) - 20) * 8;
+    }
+
+    public int Evaluate(Board board) {
+        int mg = 0, eg = 0, phase = 0;
+
+        foreach(bool stm in new[] {true, false}) {
+            for(var p = PieceType.Pawn; p <= PieceType.King; p++) {
+                int piece = (int)p, ind;
+                ulong mask = board.GetPieceBitboard(p, stm);
+                while(mask != 0) {
+                    phase += piecePhase[piece];
+                    ind = 128 * (piece - 1) + BitboardHelper.ClearAndGetIndexOfLSB(ref mask) ^ (stm ? 56 : 0);
+                    mg += getPstVal(ind) + pieceVal[piece];
+                    eg += getPstVal(ind + 64) + pieceVal[piece];
+                }
+            }
+
+            mg = -mg;
+            eg = -eg;
+        }
+
+        return (mg * phase + eg * (24 - phase)) / 24 * (board.IsWhiteToMove ? 1 : -1);
+    }
+
+    // https://www.chessprogramming.org/Negamax
+    // https://www.chessprogramming.org/Quiescence_Search
+    public int Search(Board board, Timer timer, int alpha, int beta, int depth, int ply) {
+        ulong key = board.ZobristKey;
+        bool qsearch = depth <= 0;
+        bool notRoot = ply > 0;
+        int best = -30000;
+
+        // Check for repetition (this is much more important than material and 50 move rule draws)
+        if(notRoot && board.IsRepeatedPosition())
+            return 0;
+
+        TTEntry entry = tt[key % entries];
+
+        // TT cutoffs
+        if(notRoot && entry.key == key && entry.depth >= depth && (
+            entry.bound == 3 // exact score
+                || entry.bound == 2 && entry.score >= beta // lower bound, fail high
+                || entry.bound == 1 && entry.score <= alpha // upper bound, fail low
+        )) return entry.score;
+
+        int eval = Evaluate(board);
+
+        // Quiescence search is in the same function as negamax to save tokens
+        if(qsearch) {
+            best = eval;
+            if(best >= beta) return best;
+            alpha = Math.Max(alpha, best);
+        }
+
+        // Generate moves, only captures in qsearch
+        Move[] moves = board.GetLegalMoves(qsearch);
+        int[] scores = new int[moves.Length];
+
+        // Score moves
+        for(int i = 0; i < moves.Length; i++) {
+            Move move = moves[i];
+            // TT move
+            if(move == entry.move) scores[i] = 1000000;
+            // https://www.chessprogramming.org/MVV-LVA
+            else if(move.IsCapture) scores[i] = 100 * (int)move.CapturePieceType - (int)move.MovePieceType;
+        }
+
+        Move bestMove = Move.NullMove;
+        int origAlpha = alpha;
+
+        // Search moves
+        for(int i = 0; i < moves.Length; i++) {
+            if(timer.MillisecondsElapsedThisTurn >= timer.MillisecondsRemaining / 30) return 30000;
+
+            // Incrementally sort moves
+            for(int j = i + 1; j < moves.Length; j++) {
+                if(scores[j] > scores[i])
+                    (scores[i], scores[j], moves[i], moves[j]) = (scores[j], scores[i], moves[j], moves[i]);
+            }
+
+            Move move = moves[i];
+            board.MakeMove(move);
+            int score = -Search(board, timer, -beta, -alpha, depth - 1, ply + 1);
+            board.UndoMove(move);
+
+            // New best move
+            if(score > best) {
+                best = score;
+                bestMove = move;
+                if(ply == 0) bestmoveRoot = move;
+
+                // Improve alpha
+                alpha = Math.Max(alpha, score);
+
+                // Fail-high
+                if(alpha >= beta) break;
+
+            }
+        }
+
+        // (Check/Stale)mate
+        if(!qsearch && moves.Length == 0) return board.IsInCheck() ? -30000 + ply : 0;
+
+        // Did we fail high/low or get an exact score?
+        int bound = best >= beta ? 2 : best > origAlpha ? 3 : 1;
+
+        // Push to TT
+        tt[key % entries] = new TTEntry(key, bestMove, depth, best, bound);
+
+        return best;
+    }
 
     public Move Think(Board board, Timer timer)
     {
+        bestmoveRoot = Move.NullMove;
+        // https://www.chessprogramming.org/Iterative_Deepening
+        for(int depth = 1; depth <= 50; depth++) {
+            int score = Search(board, timer, -30000, 30000, depth, 0);
 
-        // Clear the transposition table every 4 ply
-        // if (board.PlyCount % 4 == 0) transpositionTable.Clear();
-
-        int mySide = board.IsWhiteToMove? 1 : -1;
-        gamePhase = getGamePhase(board);
-
-        if (gamePhase == 5) {
-            MAX_DEPTH_PLY = 8;
-            pieceValues[1] = 150;
-            pieceValues[2] = 250;
-            pieceValues[3] = 350;
-            pieceValues[4] = 650;
+            // Out of time
+            if(timer.MillisecondsElapsedThisTurn >= timer.MillisecondsRemaining / 30)
+                break;
         }
-        else if (gamePhase >= 4) {
-            MAX_DEPTH_PLY = 4;
-            pieceValues[1] = 125;
-            pieceValues[4] = 600;
-        }
-
-        // Look for the highest eval. Eval function
-        // evaluates from the perspective of our side, 
-        // so we want the highest achievable
-        int bestEval = -1000000 * mySide;
-        Move bestMove = new();
-
-
-        foreach (Move move in orderMoves(board))
-        {   
-            board.MakeMove(move);
-
-            int eval = minimax(board, MAX_DEPTH_PLY, -1000000, 1000000, board.IsWhiteToMove);
-            Console.WriteLine("\x1b[0m" + move.ToString() + " Eval: \x1b[32m" + eval + "\x1b[0m");
-            if (eval * mySide >= bestEval * mySide)
-            {
-                bestEval = eval;
-                bestMove = move;
-            }
-            board.UndoMove(move);
-        }
-
-        Console.WriteLine("Best move: " + bestMove.ToString() + " with eval \x1b[32m" + bestEval + "\x1b[0m");
-        Console.WriteLine("Game phase: " + gamePhase + " with depth " + MAX_DEPTH_PLY);
-        return bestMove;
-    }
-
-    
-    int staticEval(Board board) {
-        // Evaluate the board without looking ahead
-        int eval = 0;
-
-        //MATERIAL EVALUATION
-        // Return +-1000000 if checkmate
-        if (board.IsInCheckmate())
-            return 1000000 * (board.IsWhiteToMove? -1 : 1);
-
-        if (getGamePhase(board) >= 4) { // Endgame handling
-            // In the endgame, both sides need to try and promote pawns
-            // Its also important to keep the king active, so favor kings being in the center
-            // Favor position for a side if they have a passed pawn
-
-            // Pawn promotions & passer checking
-            foreach (Piece P in board.GetAllPieceLists()[0].Concat(board.GetAllPieceLists()[6])) {
-
-                
-
-                // If a pawn is about to promote, 
-                if (P.IsWhite && P.Square.Rank == 6)
-                    // Add 500 now, if the promotion square is under control add 400 more <- ADD LATER
-                    eval += 500 * nonMaterialEvalMultiplier;
-                else if (!P.IsWhite && P.Square.Rank == 1)
-                    eval -= 500 * nonMaterialEvalMultiplier;
-            }
-        }
-
-        // Get the material difference between the two sides
-        // Positive if white is ahead, negative if black is ahead
-        PieceList[] allPieceLists = board.GetAllPieceLists();
-        int[] openFiles = new int[8];
-
-        for (int i = 0; i < allPieceLists.Length; i++)  
-            eval += (pieceValues[i % 6 + 1] * allPieceLists[i].Count) * (i < 6? 1 : -1);
-
-        
-        //PUSH CENTER PAWNS
-        foreach(Piece P in allPieceLists[0].Concat(allPieceLists[6])){
-            openFiles[P.Square.File] = 1;
-
-            if(getGamePhase(board) < 4 && (P.Square.File == 2 || P.Square.File == 3 || P.Square.File == 4) && 
-                (P.Square.Rank == 3 || P.Square.Rank == 4))
-                eval += (10 + P.Square.File) * (P.IsWhite? 1 : -1) * nonMaterialEvalMultiplier;
-        }
-
-        //MOVE KNIGHTS & BISHOPS AWAY FROM EDGES
-        foreach(Piece N in allPieceLists[1].Concat(allPieceLists[7]).Concat(allPieceLists[2]).Concat(allPieceLists[8]))
-            if(N.Square.File == 0 || N.Square.File == 7 || N.Square.Rank == 0 || N.Square.Rank == 7)
-                eval -= 10 * (N.IsWhite? 1 : -1) * nonMaterialEvalMultiplier;
-
-        //MOVE ROOKS TO OPEN FILES 
-        foreach(Piece R in allPieceLists[3].Concat(allPieceLists[9])){
-            if(openFiles[R.Square.File] == 0)
-                eval += 8 * (R.IsWhite? 1 : -1) * nonMaterialEvalMultiplier;
-
-            //places rooks on the 7th/2nd in the endgame
-            if(getGamePhase(board) >= 4 && (R.Square.Rank == 3.5 + 2.5 * (R.IsWhite? 1 : -1)))
-                eval += 10 * (R.IsWhite? 1 : -1) * nonMaterialEvalMultiplier;
-        }
-        
-
-        return eval;
-    }
-
-    int getGamePhase(Board board) {
-        /**
-         * Returns:
-         *
-         * 0 if opening -           theory, development, memorized lines
-         * 1 if early game -        development, piece activity, space
-         * 2 if midgame -           attacking, defending, king safety
-         * 3 if middle/late game -  maybe getting rooks out, attacking
-         * 4 if endgame -           pawn play and piece coordination
-         * 5 if late endgame -      promotion, king activity, checkmate
-         *
-         * Maximum starting material is 78 points in total
-        **/
-        int totalMaterial = -200000; // Kings shouldn't be counted
-        PieceList[] allPieceLists = board.GetAllPieceLists();
-        for (int i = 0; i < allPieceLists.Length; i++)
-        {
-            totalMaterial += pieceValues[i % 6 + 1] * allPieceLists[i].Count;
-        }
-
-        if (board.PlyCount <= 6) return 0;
-        if (board.PlyCount <= 16) return 1;
-
-        // Now based on material
-
-        return 1 + (10000 - totalMaterial) / 2000;
-    }
-
-    List<Move> orderMoves(Board board){
-        // Order moves by captures, promotions, checks, and then by least valuable victim
-        // This will be used to order the moves in the minimax search
-        List<Move> moves = Enumerable.ToList(board.GetLegalMoves());
-        List<Move> interestingMoves = new();
-        interestingMoves.AddRange(moves.Where(x => x.IsCapture || x.IsPromotion).ToList());
-
-        // foreach (Move m in moves) {
-        //     // Check if it is a threat move by getting the attacked bitboard and &ing with opponent's pieces bitboard
-        //     if (moveIsThreat(board, m) && !interestingMoves.Contains(m))
-        //         interestingMoves.Add(m);
-        // }
-
-        interestingMoves.AddRange(moves.Except(interestingMoves).ToList());
-
-        return interestingMoves;
-    }
-
-    // Boolean moveIsThreat(Board board, Move move) {
-    //     // Check if the move is a threat move by getting the attacked bitboard and &ing with opponent's pieces bitboard
-// 
-    //     board.MakeMove(move);
-    //     List<Func<ulong>> pieceTypeToAttackFunction = new List<Func<ulong>> {
-    //         () => BitboardHelper.GetPawnAttacks(move.TargetSquare, board.IsWhiteToMove),
-    //         () => BitboardHelper.GetKnightAttacks(move.TargetSquare),
-    //         () => BitboardHelper.GetSliderAttacks(PieceType.Bishop, move.TargetSquare, board.AllPiecesBitboard),
-    //         () => BitboardHelper.GetSliderAttacks(PieceType.Rook, move.TargetSquare, board.AllPiecesBitboard),
-    //         () => BitboardHelper.GetSliderAttacks(PieceType.Queen, move.TargetSquare, board.AllPiecesBitboard),
-    //         () => BitboardHelper.GetKingAttacks(move.TargetSquare)
-    //     };
-// 
-    //     ulong attackedBitboard = pieceTypeToAttackFunction[(int)move.MovePieceType-1]();
-    //     board.UndoMove(move);
-// 
-    //     return board.IsWhiteToMove? (attackedBitboard & board.BlackPiecesBitboard) != 0 : (attackedBitboard & board.WhitePiecesBitboard) != 0;
-    // }
-
-    int minimax(Board position, int depth, int alpha, int beta, bool maximizingPlayer) {
-        
-        // try { 
-        //     int evalAndDepthSearched = transpositionTable[position.ZobristKey]; 
-        //     if (evalAndDepthSearched >> 24 >= depth)
-        //         return evalAndDepthSearched % 0xFFFFFF;
-        // } catch {} // It doesn't exist in the transposition table, so we need to evaluate it (move on)
-
-        if (depth == 0) 
-            return staticEval(position);
-        
-
-        List<Move> orderedMoves = orderMoves(position);
-
-        int bestEval = maximizingPlayer? -1000000 : 1000000;
-        foreach (Move move in orderedMoves) {
-
-            //discourage bad moves like Kf8 in the opening and middlegame
-            int moveBonus = ((move.MovePieceType == PieceType.King && !move.IsCastles && gamePhase < 3)? -100 : 0) * nonMaterialEvalMultiplier;
-
-
-            position.MakeMove(move);
-
-            // If the game is drawn, return 0
-            if (position.IsDraw() && gamePhase >= 3) {
-                position.UndoMove(move); 
-                return 0;
-            }
-
-            int depthBonus = (move.IsCapture || orderedMoves.Count == 1)? 1 : 0;
-            int eval = minimax(position, depth - 1, alpha, beta, !maximizingPlayer);
-            position.UndoMove(move);
-            
-            if (maximizingPlayer) {
-                bestEval = Math.Max(bestEval, eval) + moveBonus;
-                alpha = Math.Max(alpha, eval);
-                if (beta <= alpha)
-                    break;
-            } else {
-                bestEval = Math.Min(bestEval, eval) - moveBonus;
-                beta = Math.Min(beta, eval);
-                if (beta <= alpha)
-                    break;
-            }
-        }
-
-        // transpositionTable[position.ZobristKey] = bestEval + 2^24 * depth; // First 8 bits represent the depth
-        return bestEval;
+        return bestmoveRoot.IsNull ? board.GetLegalMoves()[0] : bestmoveRoot;
     }
 }
