@@ -143,6 +143,7 @@ public class EvilBot : IChessBot
         // https://www.chessprogramming.org/Iterative_Deepening
         for(int depth = 1; depth <= 50; depth++) {
             int score = Search(board, timer, -30000, 30000, depth, 0);
+            Console.WriteLine("Depth " + depth + " score: " + score + " bestmove: " + bestmoveRoot.ToString());
 
             // Out of time
             if(timer.MillisecondsElapsedThisTurn >= timer.MillisecondsRemaining / 30)

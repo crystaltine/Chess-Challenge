@@ -67,7 +67,7 @@ public class EvaluationFunctions {
         // Before endgame, give bonus if king stays on top 5 common squares
         // For white: b1, c1, e1, g1, h1; for black: b8, c8, e8, g8, h8
         if (gPhase < 4) {
-            int[] commonKingSquares = { 1, 2, 4, 6, 7 };
+            int[] commonKingSquares = { 1, 2, 4, 6, 7 }; // file indicies of B, C, E, G, H
             if (commonKingSquares.Contains(kingLoc.File)) kingSafetyEval += 95;
         }
 
@@ -91,21 +91,31 @@ public class EvaluationFunctions {
         return kingSafetyEval * (whiteKing? 1 : -1);
     }
 }
-public class TranspositionTableObject {
+public struct TTEntry {
+    public ulong Key { get; set; }
     public int Depth { get; set; }
-    public SearchResult result { get; set; }
+    public SearchResult Result { get; set; }
+    public TTEntry(ulong key, int depth, SearchResult result) {
+        Key = key;
+        Depth = depth;
+        this.Result = result;
+    }
 }
-public class SearchResult {
+public struct SearchResult {
     public int Evaluation { get; set; }
     public List<Move> PV { get; set; }
+    public SearchResult(int eval = 0, List<Move>? pv = null) {
+        Evaluation = eval;
+        PV = pv ?? new List<Move>();
+    }
 }
 public class MyBot : IChessBot {
     # region CLASSVARS
-    Dictionary<ulong, TranspositionTableObject> TranspositionTable = new (); // Lookup duplicate positions for speed
+    const int TT_SIZE_LIMIT = 10_000_000; // max number of TTEntries (size of array)
+    TTEntry[] TranspositionTable = new TTEntry[TT_SIZE_LIMIT];
     int[] pieceValues = { 0, 95, 290, 310, 470, 910, 0 }; // Null P N B R Q K, can be changed based on gamephase
     int THINK_TIME = 5000; // milliseconds
     int DEPTH_EXTENSION_LIMIT = 4; // how many times we can extend the search for checks
-    int TT_SIZE_LIMIT = 10_000_000; // Board keys are 8 bytes, SearchResult is list of ~5 moves of 2 bytes each ~= 18 bytes per entry
     int positionalEvalMultiplier = 1; // how much non-material based evals are worth
     int gamePhase = 0; // 0 opening, 1 early game, 2 midgame, 3 late midgame, 4 endgame, 5 late endgame
     ulong whitePawnAttacksBitboard; // all squares white's pawns can attack
@@ -123,6 +133,7 @@ public class MyBot : IChessBot {
     int __transpositionLookups = 0; // number of lookups made each move calculation
     # endregion
     string getDisplayEval(int evaluation) {
+        evaluation = evaluation * sideNegator;
         string displayEval = Math.Abs((double) evaluation / 100).ToString("0.00");
         // For displaying mate
         if (IsMate(evaluation)) {
@@ -132,10 +143,6 @@ public class MyBot : IChessBot {
         if (evaluation > 0) displayEval = "+" + displayEval;
         else if (evaluation < 0) displayEval = "-" + displayEval;
 
-        if (!IsMate(evaluation)) {
-            // format to 2 decimal places
-
-        }
         return displayEval;
     }
     bool IsMate(int evaluation) {
@@ -143,7 +150,6 @@ public class MyBot : IChessBot {
     }
     int UpdateIfMate(int evaluation) {
         // If the search result is a mate, increase the depth by 1
-
         // Increase mate depth means -1 for white, +1 for black (since technically deeper mate is worse)
         if (IsMate(evaluation)) return evaluation + (evaluation > 0? -1 : 1);
         return evaluation; // not mate, just return back eval
@@ -164,13 +170,8 @@ public class MyBot : IChessBot {
             blackPawnAttacksBitboard |= BitboardHelper.GetPawnAttacks(P.Square, false);
         if (gamePhase > 3) pieceValues = new int[] { 0, 150, 285, 320, 560, 910, 0 }; // pawns and rooks much more important
 
-        // Clear the transposition table if it gets too big
-        if (TranspositionTable.Count > TT_SIZE_LIMIT) TranspositionTable.Clear();
-
         int deepestSearch = MainSearch(board, timer);
 
-        // string pvWithoutNulls = string.Join(" ", pv.Where(x => !x.Equals(Move.NullMove)).Select(x => x.ToString()));
-        // Console.WriteLine("\u001b[48;5;130mdepth " + (deepestSearch+1) + " ply\x1b[0m bestmove\x1b[32m " + bestMove + "\x1b[37m eval \x1b[36m" + getDisplayEval(bestMoveEval) + "\x1b[37m nodes \x1b[35m" + __nodes + "\x1b[37m lookups\x1b[34m " + __transpositionLookups + "\x1b[37m tablesize\x1b[31m " + TranspositionTable.Count + "\x1b[37m time \u001b[38;5;214m" + timer.MillisecondsElapsedThisTurn + "ms \x1b[37m\x1b[0mpv \x1b[33m" + pvWithoutNulls + "\x1b[37m\x1b[0m");
         Console.WriteLine("===================================================================================================================");
         return bestMove;
     }
@@ -178,20 +179,22 @@ public class MyBot : IChessBot {
         int searchDepth = -1; // technically 1 lower than it should be since we loop in this method
 
         bestMove = Move.NullMove;
-        bestMoveEval = playingWhite? -1999999 : 1999999;
+        bestMoveEval = -1999999; // relative to us now, only adjust to absolute eval when displaying
 
         while (true) {
             searchDepth++; 
             Move bestMoveFoundThisDepth = Move.NullMove;
-            int bestEvalFoundThisDepth = playingWhite? -2999999 : 2999999;
-            List<Move> orderedMoves = OrderMoves(board, bestMove.Equals(Move.NullMove)? new List<Move>() : new List<Move>() {bestMove});
+            int bestEvalFoundThisDepth = -2999999;
+            List<Move> orderedMoves = OrderMoves(board, bestMove.Equals(Move.NullMove)? new() : new() {bestMove});
             
             foreach (Move move in orderedMoves) {
                 board.MakeMove(move);
-                SearchResult result = Search_V4(board, searchDepth, 0, -3999999, 3999999, !playingWhite);          
+                SearchResult result = Search_V5_Negamax(board, 3999999, -3999999, searchDepth, 1);
+                result.Evaluation *= -1; // negate eval since we are looking at it from the other side
+                result.Evaluation = UpdateIfMate(result.Evaluation);    
                 board.UndoMove(move);
 
-                if (result.Evaluation * sideNegator > bestEvalFoundThisDepth * sideNegator) {
+                if (result.Evaluation > bestEvalFoundThisDepth) {
                     bestEvalFoundThisDepth = result.Evaluation;
                     bestMoveFoundThisDepth = move;
                     result.PV.Add(move);
@@ -218,11 +221,9 @@ public class MyBot : IChessBot {
             string nodesString = "\x1b[37mnodes\x1b[35m " + __nodes + "\x1b[37m";
             nodesString += string.Concat(Enumerable.Repeat(" ", 29 - nodesString.Length));
             string lookupsString = "\x1b[37mlookups\x1b[34m " + __transpositionLookups + "\x1b[37m";
-            lookupsString += string.Concat(Enumerable.Repeat(" ", 32 - lookupsString.Length));
-            string tablesizeString = "tablesize\x1b[31m " + TranspositionTable.Count + "\x1b[37m";
-            tablesizeString += string.Concat(Enumerable.Repeat(" ", 33 - tablesizeString.Length));
+            lookupsString += string.Concat(Enumerable.Repeat(" ", 30 - lookupsString.Length));
             string pvWithoutNulls = "\x1b[37mpv\x1b[33m " + string.Join(" ", bestMovePV.Where(x => !x.Equals(Move.NullMove)).Select(x => x.ToString()));
-            Console.WriteLine(string.Join(" ", new string[] {depthString, timeString, bestMoveString, bestEvalString, nodesString, lookupsString, tablesizeString, pvWithoutNulls}));
+            Console.WriteLine(string.Join(" ", new string[] {depthString, timeString, bestMoveString, bestEvalString, nodesString, lookupsString, pvWithoutNulls}));
 
             bestMove = bestMoveFoundThisDepth;
             bestMoveEval = bestEvalFoundThisDepth;
@@ -391,98 +392,58 @@ public class MyBot : IChessBot {
         priorityMoves.AddRange(moves.OrderByDescending(x => x.Value).Select(x => x.Key).ToList());
         return priorityMoves;
     }
-    int QuiescenceSearch(Board board, int alpha, int beta) {
-        int staticEval = Evaluate(board) * (board.IsWhiteToMove? 1 : -1);
-
-        if (staticEval >= beta) return beta;
-        alpha = Math.Max(alpha, staticEval);
-
-        foreach(Move m in OrderMoves(board, new List<Move>(), true))  {
-            board.MakeMove(m);
-            int score = -QuiescenceSearch(board, -beta, -alpha);
-            board.UndoMove(m);
-
-            if (score >= beta) return beta;
-            alpha = Math.Max(alpha, score);
-        }
-
-        return alpha;
-    }
-    SearchResult Search_V4(Board board, int depthRemaining, int depthFromRoot, int alpha, int beta, bool maximizing, int numExtensions = 0) {
+    SearchResult Search_V5_Negamax(Board board, int alpha, int beta, int depthRemaining, int depthFromRoot, int numExtensions = 0) {
         __nodes++;
-        int dynamicSideNegator = board.IsWhiteToMove? 1 : -1;
 
-        if (board.IsInCheckmate()) return new SearchResult {
-            Evaluation = -1000000 * dynamicSideNegator,
-            PV = new()
-        };
-        if (board.IsDraw()) return new SearchResult {
-            Evaluation = 0,
-            PV = new()
-        };
-        if (depthRemaining <= 0) {
-            int param_1 = board.IsWhiteToMove? alpha : -beta;
-            int param_2 = board.IsWhiteToMove? beta : -alpha;
-            int eval_raw = QuiescenceSearch(board, param_1, param_2);// * dynamicSideNegator;
-            int eval = eval_raw * dynamicSideNegator;
-            return new SearchResult {
-            Evaluation = eval,
-            PV = new()
-        };}
+        if (board.IsInCheckmate()) return new(-1000000); // much bad
+        if (board.IsDraw()) return new(); // much neutral
+        if (board.IsRepeatedPosition()) return new(); // Draw since bots will probably just play the same move in same pos
 
-        SearchResult bestResult = new SearchResult {
-            Evaluation = maximizing? -4999999 : 4999999,
-            PV = new()
-        };
+        bool quiescenceSearch = depthRemaining <= 0;
+        ulong currentBoardHash = board.ZobristKey;
+        Console.WriteLine("Depth remaming is " + depthRemaining + " and depth from root is " + depthFromRoot + " and qs bool is " + quiescenceSearch);
+
+        TTEntry saved = TranspositionTable[currentBoardHash % TT_SIZE_LIMIT];
+        if (saved.Key == currentBoardHash && saved.Depth >= depthRemaining)
+            return saved.Result;
+
+        SearchResult bestResult = new(-1000000);
+        List<Move> orderedMoves = OrderMoves(board, new(), quiescenceSearch);
         Move bestMove = Move.NullMove;
 
-        foreach (Move move in OrderMoves(board, new List<Move> ())) {
+        if (quiescenceSearch) {
+            bestResult.Evaluation = Evaluate(board) * (board.IsWhiteToMove? 1 : -1); // Evaluate() gives absolute, change to relative
+            Console.WriteLine("QS at depthFromRoot " + depthFromRoot + " fen " + board.GetFenString() + " evalrelative " + bestResult.Evaluation*(board.IsWhiteToMove? 1 : -1));
+            if (bestResult.Evaluation >= beta) return bestResult;
+            alpha = Math.Max(alpha, bestResult.Evaluation);
+        }
+
+        foreach (Move move in orderedMoves) {
             board.MakeMove(move);
 
-            SearchResult result;
-            if (TranspositionTable.ContainsKey(board.ZobristKey) && TranspositionTable[board.ZobristKey].Depth >= depthRemaining) {
-                __transpositionLookups++;
-                result = TranspositionTable[board.ZobristKey].result;
-            } 
-            else {
-                int extension = (board.IsInCheck() || move.IsPromotion) && numExtensions < DEPTH_EXTENSION_LIMIT? 1 : 0;
-                result = Search_V4(board, depthRemaining - 1 + extension, depthFromRoot + 1, alpha, beta, !maximizing, numExtensions + extension); 
-                result.Evaluation = UpdateIfMate(result.Evaluation);
-
-                TranspositionTable.TryAdd(
-                    board.ZobristKey,
-                    new TranspositionTableObject {
-                        Depth = depthRemaining,
-                        result = result
-                    }
-                );
-            }
+            // Search 1 ply deeper if its a check (not to exceed the limit to prevent it getting out of hand)
+            int extension = (board.IsInCheck() || move.IsPromotion) && numExtensions < DEPTH_EXTENSION_LIMIT? 1 : 0;
+            SearchResult result = Search_V5_Negamax(board, -beta, -alpha, depthRemaining - 1 + extension, depthFromRoot + 1, numExtensions + extension);
+            result.Evaluation *= -1; // It should return -Search_V5_Negamax but we cant negate an object
+            result.Evaluation = UpdateIfMate(result.Evaluation); // Increase the length of the mate since its one ply deeper
 
             board.UndoMove(move);
 
-            int score = result.Evaluation;
-
-            if (maximizing) {
-                // If score exceeds beta no need to keep searching
-                if (score >= beta) return new SearchResult{Evaluation=score, PV=result.PV.Append(move).ToList()};
-                if (score > bestResult.Evaluation) {
-                    bestResult = result;
-                    bestMove = move;
-                }
-                alpha = Math.Max(alpha, score);
-            } else {
-                // If score under alpha no need to keep searching
-                if (score <= alpha) return new SearchResult{Evaluation=score, PV=result.PV.Append(move).ToList()};
-                if (score < bestResult.Evaluation) {
-                    bestResult = result;
-                    bestMove = move;
-                }
-                beta = Math.Min(beta, score);
+            if (result.Evaluation > bestResult.Evaluation) {
+                bestResult = result;
+                bestMove = move;
             }
+
+            alpha = Math.Max(alpha, result.Evaluation);
+
+            // "Fail-high" beta cutoff - if the score that is guaranteed for us is really bad
+            // for the other guy, they won't (or shouldn't) let us get here in the first place.
+            if (alpha >= beta) break;
         }
-        return new SearchResult {
-            Evaluation = bestResult.Evaluation,
-            PV = bestResult.PV.Append(bestMove).ToList()
-        };
+
+        // Add to transposition table
+        TranspositionTable[currentBoardHash % TT_SIZE_LIMIT] = new TTEntry(currentBoardHash, depthRemaining, bestResult);
+
+        return new SearchResult(bestResult.Evaluation, bestResult.PV?.Append(bestMove).ToList());
     }
 }

@@ -150,6 +150,7 @@ public class MyBot : IChessBot {
     }
     public Move Think(Board board, Timer timer) {
         this.timer = timer;
+        // THINK_TIME = (timer.OpponentMillisecondsRemaining < timer.MillisecondsRemaining? 500:0) + 200 + timer.MillisecondsRemaining / 40; // 1/40th of the time left, sometimes will go over a little (although it will go over less as time gets shorter)
         searchCanceled = false;
         playingWhite = board.IsWhiteToMove;
         sideNegator = playingWhite? 1 : -1;
