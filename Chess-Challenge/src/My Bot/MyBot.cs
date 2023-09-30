@@ -205,7 +205,7 @@ public class MyBot : IChessBot {
                 }
             }
 
-            if (bestMoveFoundThisDepth.Equals(Move.NullMove)) break; // no moves found, so break out of loop and use the previous depth's best move
+            if (bestMoveFoundThisDepth.Equals(Move.NullMove) || bestMoveFoundThisDepth.Equals(bestMove)) break; // no moves found, so break out of loop and use the previous depth's best move
 
             string timeString = "\x1b[37mtime\u001b[38;5;214m " + timer.MillisecondsElapsedThisTurn + "ms\x1b[37m\x1b[0m";
             timeString += string.Concat(Enumerable.Repeat(" ", 38 - timeString.Length));
